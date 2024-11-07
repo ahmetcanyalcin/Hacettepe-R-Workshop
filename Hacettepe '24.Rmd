@@ -1,0 +1,181 @@
+---
+title: "Hacettepe '24 R Workshop"
+author: "Ahmetcan Yalçın"
+date: "`r Sys.Date(2024-12-15)`"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r cars, echo = TRUE}
+
+#Kütüphaneler
+
+library(dplyr)
+library(ggplot2)
+library(forecast)
+library(lmtest)
+library(tseries)
+library(pastecs)
+```
+
+```{r}
+# CSV dosyalarını yükleme
+
+med_df <- read.csv("C:/Users/ahmet/Desktop/Hacettepe '24/med.csv", sep="")
+train_df <- read.csv("C:/Users/ahmet/Desktop/Hacettepe '24/train.csv")
+
+View(med_df)
+View(train_df)
+```
+
+```{r}
+# Tarih formatına çevirme
+med_df$Tarih <- as.Date(med_df$Tarih, format="%Y-%m-%d")
+train_df$Tarih <- as.POSIXct(train_df$Tarih, format="%Y-%m-%d %H:%M:%S")
+```
+
+```{r}
+# İlk birkaç satırı görüntüleme
+head(med_df)
+head(train_df)
+tail(med_df)
+tail(train_df)
+colnames(med_df)
+colnames(train_df)
+
+# Özet istatistikleri
+summary(train_df$Dağıtılan.Enerji..MWh.)
+
+
+# Eksik değer kontrolü
+sum(is.na(train_df))
+```
+
+
+
+```{r}
+# Yıllara Göre Enerji Tüketimi Görseli
+
+ggplot(train_df, aes(x=Tarih, y=DağıtılanEnerjiMWh)) +
+  geom_line(color="blue") +
+  labs(title="Dağıtılan Enerji Zaman Serisi", x="Tarih", y="Dağıtılan Enerji (MWh)") +
+  geom_vline(data=med_df, aes(xintercept=as.numeric(Tarih)), color="red", linetype="dashed")
+
+
+#Yıl ve Ay Bilgisini Ekliyoruz
+train_df$Year <- format(train_df$Tarih, "%Y")
+train_df$Month <- format(train_df$Tarih, "%m")
+# Aylık toplam enerji hesaplama
+monthly_energy <- aggregate(DağıtılanEnerjiMWh ~ Year + Month, data=train_df, FUN=sum)
+
+# Yıldan bağımsız olarak, her yıl için en yüksek ve en düşük enerji tüketilen ayları bulma
+highest_energy_month <- monthly_energy[which.max(monthly_energy$DağıtılanEnerjiMWh), ]
+lowest_energy_month <- monthly_energy[which.min(monthly_energy$DağıtılanEnerjiMWh), ]
+
+
+# Aylık enerji tüketimini görselleştirme
+ggplot(monthly_energy, aes(x = interaction(Year, Month), y = DağıtılanEnerjiMWh, fill = DağıtılanEnerjiMWh)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(low = "yellow", high = "red") +
+  labs(title = "Yıllara Göre Aylık Enerji Tüketimi", x = "Yıl-Ay", y = "Enerji Tüketimi (MWh)") +
+  theme_minimal() +
+  geom_bar(data = highest_energy_month, aes(x = interaction(Year, Month), y = DağıtılanEnerjiMWh), fill = "red", stat = "identity") +
+  geom_bar(data = lowest_energy_month, aes(x = interaction(Year, Month), y = DağıtılanEnerjiMWh), fill = "green", stat = "identity")
+
+
+
+
+# Her yıl için en yüksek enerji tüketilen 3 ayı seçme
+top_3_months_per_year <- monthly_energy %>%
+  group_by(Year) %>%
+  top_n(3, DağıtılanEnerjiMWh)
+
+
+# Her yılın en yüksek enerji tüketilen 3 ayını görselleştirme
+ggplot(top_3_months_per_year, aes(x = interaction(Year, Month), y = DağıtılanEnerjiMWh, fill = DağıtılanEnerjiMWh)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_gradient(low = "yellow", high = "red") +
+  labs(title = "Yıllık En Yüksek Enerji Tüketimi Olan 3 Ay", x = "Yıl-Ay", y = "Enerji Tüketimi (MWh)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+set.seed(123)
+train_index <- sample(1:nrow(train_df), 0.8 * nrow(train_df))
+train_data <- train_df[train_index, ]
+test_data <- train_df[-train_index, ]
+```
+
+```{r}
+###Tahmin Modelleri
+
+#ARIMA (AutoRegressive Integrated Moving Average) modeli, zaman serisi tahminleri yapmak için yaygın kullanılan bir modeldir. Bu modeli kullanarak enerji dağıtımını tahmin edebiliriz.
+
+# ARIMA modelini kurma
+arima_model <- auto.arima(train_data$DağıtılanEnerjiMWh)
+
+# Tahmin yapma
+predictions <- forecast(arima_model, h = nrow(test_data))
+
+# Tahmin edilen değerleri görüntüleme
+predictions$mean
+
+```
+
+```{r}
+
+# MAPE hesaplama
+
+^#MAPE (Mean Absolute Percentage Error), modelin başarısını değerlendirmek için kullanılan bir başarı ölçütüdür. Tahmin edilen ve gerçek değerler arasındaki farkın mutlak değerinin, gerçek değere oranının ortalamasıdır. Bu metrik, modelin tahminlerinin ne kadar doğru olduğunu anlamamıza yardımcı olur.
+  
+mape <- mean(abs((test_data$DağıtılanEnerjiMWh - predictions$mean) / test_data$DağıtılanEnerjiMWh)) * 100
+mape
+
+# mape
+# 20.20751
+```
+```{r}
+#Model Başarısı Testi
+
+# ARIMA modelinin kalıntılarını (residüeller) almak
+residuals <- residuals(arima_model)
+
+# Breusch-Pagan Testi (kalıntılar üzerinde)
+lm_model <- lm(residuals ~ train_data$DağıtılanEnerjiMWh)
+breusch_pagan_test <- bptest(lm_model)
+print(breusch_pagan_test)
+
+
+#	studentized Breusch-Pagan test
+
+#data:  lm_model
+#BP = 0.014989, df = 1, p-value = 0.9026
+
+```
+
+
+#BP (Breusch-Pagan) Değeri: 0.014989
+Bu, testin istatistiksel değeridir. Genellikle, bu değerin büyüklüğü tek başına çok anlamlı değildir. Önemli olan, bu değerin karşılaştırıldığı p-değeri'dir.
+
+Serbestlik Derecesi (df): 1
+Burada 1 serbestlik derecesi, modeldeki bağımsız değişken sayısına ve yapılan testin derecesine dayanır. Bu durumda, sadece tek bir bağımsız değişken (train_data$DağıtılanEnerjiMWh) kullanılmıştır.
+
+p-değeri: 0.9026
+Bu, testin istatistiksel anlamlılığını gösteren değerdir. p-değeri çok önemlidir çünkü bir hipotez testi sonuçlarının güvenilir olup olmadığını belirler.
+
+Eğer p-değeri 0.05'ten küçükse, testin anlamlı olduğu kabul edilir ve modelde heteroskedastisite (varyans değişikliği) olduğu düşünülür.
+Eğer p-değeri 0.05'ten büyükse, heteroskedastisite yoktur ve varyansın sabit olduğu kabul edilir.
+Sonuçların Yorumlanması:
+p-değeri = 0.9026, bu çok büyük bir değerdir ve bu da modelde heteroskedastisite olmadığını gösterir. Yani, kalıntılarınızda varyans değişikliği yoktur.
+Breusch-Pagan testinin sonucu, modelin hata terimlerinin homoscedastic (sabit varyanslı) olduğunu, yani modelin tahmin hatalarının zamanla artmadığını gösteriyor.
+Özetle:
+Bu testin sonucuna göre, modelinizin kalıntılarında heteroskedastisite (varyans değişikliği) bulunmamaktadır. Yani, modelin hataları zamanla değişen bir varyansa sahip değil ve bu, modelin güvenilirliğini artıran bir bulgudur.##
+
+
+
